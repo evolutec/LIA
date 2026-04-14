@@ -598,10 +598,85 @@ function App() {
     await importHuggingFaceModel(andLoad);
   }
 
+  function formatShortDate(value) {
+    if (!value) {
+      return "—";
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return "—";
+    }
+    return date.toLocaleString("fr-FR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
+  function formatUnixDate(value) {
+    const timestamp = Number(value);
+    if (!timestamp) {
+      return "—";
+    }
+    return formatShortDate(timestamp * 1000);
+  }
+
+  const unifiedModelRows = (() => {
+    const rows = new Map();
+
+    availableFiles.forEach((file) => {
+      const name = getAvailableModelName(file);
+      if (!name) {
+        return;
+      }
+      rows.set(name, {
+        name,
+        diskSize: file.size,
+        modifiedAt: file.modified_at,
+        vramSize: null,
+        expiresAt: null,
+        loaded: false,
+        active: name === activeModel,
+      });
+    });
+
+    loadedModels.forEach((item) => {
+      const name = getLoadedModelName(item);
+      if (!name) {
+        return;
+      }
+      const existing = rows.get(name);
+      rows.set(name, {
+        name,
+        diskSize: existing?.diskSize ?? null,
+        modifiedAt: existing?.modifiedAt ?? null,
+        vramSize: item.size_vram,
+        expiresAt: item.expires_at,
+        loaded: true,
+        active: name === activeModel,
+      });
+    });
+
+    return Array.from(rows.values()).sort((left, right) => {
+      if (left.active !== right.active) {
+        return left.active ? -1 : 1;
+      }
+      if (left.loaded !== right.loaded) {
+        return left.loaded ? -1 : 1;
+      }
+      return left.name.localeCompare(right.name, "fr", { sensitivity: "base" });
+    });
+  })();
+
   return (
     <div className="app-shell">
       <header className="app-header">
-        <h1>⚡ Model Manager — Ollama IPEX</h1>
+        <div>
+          <h1>⚡ Model Manager — Ollama IPEX</h1>
+          <p className="hero-subtitle">Pilotage local des modèles, mémoire et imports GGUF.</p>
+        </div>
         <div className="backend-badge">
           <span className={`dot ${version ? "" : "offline"}`}></span>
           <span>{version ? `Connecté · Ollama ${version.version ?? ""}` : "Ollama hors ligne"}</span>
@@ -615,17 +690,32 @@ function App() {
           </div>
         )}
 
-        {/* Backend status */}
-        <div className="card">
-          <div className="card-title">📊 Statut</div>
+        <section className="hero-panel">
+          <div className="hero-copy">
+            <div className="eyebrow">Console locale</div>
+            <h2>Une interface plus directe pour télécharger, charger et surveiller les modèles.</h2>
+            <p>Un seul bouton de téléchargement, une table unique, et les actions système regroupées en tête.</p>
+          </div>
+          <div className="hero-actions">
+            <button className="btn btn-warning" onClick={handleDropCache} disabled={loading} title="Vide le cache Linux pour restituer de la RAM libre">
+              🧹 Vider cache
+            </button>
+            <button className="btn btn-secondary" onClick={() => refreshAllModelState({ silent: false })} disabled={loading}>
+              ↻ Rafraîchir
+            </button>
+          </div>
+        </section>
+
+        <div className="card status-card">
+          <div className="card-title">📊 Statut système</div>
           <div className="card-subtitle">{formatSyncTime(lastSyncedAt)}</div>
-          <div className="status-row">
-            <div className="status-item">
+          <div className="status-grid status-grid-hero">
+            <div className="status-item status-item-glow">
               <label>Version Ollama</label>
               <div className="value">{version?.version ?? "—"}</div>
             </div>
             <div className="status-item">
-              <label>Device</label>
+              <label>GPU</label>
               <div className="value">{version?.device ?? "—"}</div>
             </div>
             <div className="status-item">
@@ -639,189 +729,22 @@ function App() {
           </div>
         </div>
 
-        {/* Download */}
-        <div className="card">
-          <div className="card-title">⬇️ Télécharger un modèle</div>
-          {downloadProgress > 0 && (
-            <div className="progress-bar">
-              <div className="progress-fill" style={{ width: `${downloadProgress}%` }}></div>
-              <span className="progress-text">{downloadProgress}%</span>
-            </div>
-          )}
-          <div className="form-grid">
-            <input
-              type="text"
-              value={ollamaName}
-              onChange={(e) => setOllamaName(e.target.value)}
-              placeholder="qwen2.5:0.5b, llama3.2:1b… (nom Ollama)"
-              aria-label="Nom du modèle Ollama"
-            />
-            <button className="btn btn-secondary" onClick={handleDownloadUrl} disabled={loading}>
-              {loading ? <><span className="spinner" /> En cours…</> : "⬇️ Télécharger"}
-            </button>
-            <button className="btn btn-primary" onClick={handleDownloadAndLoadUrl} disabled={loading}>
-              {loading ? <><span className="spinner" /> En cours…</> : "⚡ Télécharger & Charger"}
-            </button>
-          </div>
-          <p className="hint">
-            Nom de modèle Ollama (ex&nbsp;: <code>qwen2.5:0.5b</code>, <code>llama3.2:1b</code>, <code>phi3.5:mini</code>).
-            Les modèles sont stockés dans <strong>~/.ollama/models</strong> (WSL2 Ubuntu).
-          </p>
-
-          <div className="hf-divider"><span>— ou importer un fichier GGUF direct depuis HuggingFace —</span></div>
-
-          <div className="form-grid">
-            <input
-              type="text"
-              value={huggingfaceUrl}
-              onChange={(e) => handleHFUrlChange(e.target.value)}
-              placeholder="https://huggingface.co/…/resolve/main/model.Q4_K_M.gguf"
-              aria-label="URL GGUF HuggingFace"
-              style={{ gridColumn: "1 / -1" }}
-            />
-            <input
-              type="text"
-              value={hfModelName}
-              onChange={(e) => setHfModelName(e.target.value)}
-              placeholder="Nom local du modèle (auto-détecté)"
-              aria-label="Nom local du modèle"
-            />
-            <button className="btn btn-secondary" onClick={() => handleImportHF(false)} disabled={loading}>
-              {loading ? <><span className="spinner" /> En cours…</> : "⬇️ Importer"}
-            </button>
-            <button className="btn btn-primary" onClick={() => handleImportHF(true)} disabled={loading}>
-              {loading ? <><span className="spinner" /> En cours…</> : "⚡ Importer & Charger"}
-            </button>
-          </div>
-          <p className="hint">
-            Colle l'URL d'un fichier <code>.gguf</code> HuggingFace (ex&nbsp;: <code>…/resolve/main/Qwen3.5-9B.Q4_K_M.gguf</code>).
-            Le nom du modèle est auto-détecté depuis l'URL — tu peux le modifier avant d'importer. Les boutons de téléchargement détectent aussi automatiquement une URL GGUF HuggingFace collée dans ce champ.
-          </p>
-        </div>
-
-        {/* Available models */}
-        <div className="card">
+        <div className="card detail-card">
           <div className="card-header-row">
-            <div className="card-title">📂 Modèles disponibles</div>
-            <div className="auto-sync-label">Mise à jour auto</div>
-          </div>
-          {availableFiles.length === 0 ? (
-            <div className="empty-state">
-              Aucun modèle. Téléchargez-en un ci-dessus ou via&nbsp;:
-              <br/><code>wsl -d Ubuntu-24.04 -- bash -c 'cd ~/ollama-ipex && ./ollama pull qwen2.5:0.5b'</code>
-            </div>
-          ) : (
-            <div className="model-grid">
-              {availableFiles.map((file) => (
-                <div
-                  key={getAvailableModelName(file)}
-                  className={`model-card ${getAvailableModelName(file) === activeModel ? "active-model" : ""} ${isPendingModel(getAvailableModelName(file)) ? "pending-model" : ""}`}
-                >
-                  <div className="model-name">{getAvailableModelName(file)}</div>
-                  {getAvailableModelName(file) === activeModel && (
-                    <span className="badge badge-success">✓ Actif</span>
-                  )}
-                  {isPendingModel(getAvailableModelName(file), "load") && (
-                    <span className="badge badge-pending"><span className="spinner spinner-small" /> Chargement…</span>
-                  )}
-                  {isPendingModel(getAvailableModelName(file), "delete") && (
-                    <span className="badge badge-pending"><span className="spinner spinner-small" /> Suppression…</span>
-                  )}
-                  <div className="model-meta">
-                    <span>Taille : {formatBytes(file.size)}</span>
-                    <span>Modifié le {new Date(Number(file.modified_at) * 1000).toLocaleDateString("fr-FR")}</span>
-                  </div>
-                  <div className="model-actions">
-                    <button
-                      className="btn btn-primary"
-                      onClick={() => handleLoadFile(file.name)}
-                      disabled={loading || Boolean(pendingModelAction)}
-                    >
-                      {isPendingModel(getAvailableModelName(file), "load") ? <><span className="spinner" /> Chargement…</> : "⚡ Charger"}
-                    </button>
-                    <button className="btn btn-danger" onClick={() => handleDeleteFile(file.name)} disabled={loading || Boolean(pendingModelAction)}>
-                      {isPendingModel(getAvailableModelName(file), "delete") ? <><span className="spinner" /> Suppression…</> : "🗑 Supprimer"}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Loaded models (running in memory) */}
-        <div className="card">
-          <div className="card-header-row">
-            <div className="card-title">🧠 Modèles en mémoire (VRAM)</div>
-            <div className="auto-sync-label">Mise à jour auto</div>
-          </div>
-          {loadedModels.length === 0 ? (
-            <div className="empty-state">Aucun modèle chargé en VRAM. Chargez-en un depuis la liste ci-dessus.</div>
-          ) : (
-            <div className="model-grid">
-              {loadedModels.map((item) => (
-                <div
-                  key={getLoadedModelName(item)}
-                  className={`model-card ${getLoadedModelName(item) === activeModel ? "active-model" : ""} ${isPendingModel(getLoadedModelName(item)) ? "pending-model" : ""}`}
-                >
-                  <div className="model-name">{getLoadedModelName(item)}</div>
-                  {getLoadedModelName(item) === activeModel && (
-                    <span className="badge badge-success">✓ Actif</span>
-                  )}
-                  {isPendingModel(getLoadedModelName(item), "select") && (
-                    <span className="badge badge-pending"><span className="spinner spinner-small" /> Activation…</span>
-                  )}
-                  {isPendingModel(getLoadedModelName(item), "unload") && (
-                    <span className="badge badge-pending"><span className="spinner spinner-small" /> Déchargement…</span>
-                  )}
-                  <div className="model-meta">
-                    <span>VRAM : {formatBytes(item.size_vram)}</span>
-                    <span>Expire : {item.expires_at ? new Date(item.expires_at).toLocaleTimeString("fr-FR") : "—"}</span>
-                  </div>
-                  <div className="model-actions">
-                    <button
-                      className="btn btn-primary"
-                      onClick={() => handleSelectLoaded(item.model)}
-                      disabled={loading || Boolean(pendingModelAction) || item.model === activeModel}
-                    >
-                      {isPendingModel(getLoadedModelName(item), "select") ? <><span className="spinner" /> Activation…</> : item.model === activeModel ? "✓ Sélectionné" : "Sélectionner"}
-                    </button>
-                    <button
-                      className="btn btn-danger"
-                      onClick={() => handleUnloadModel(item.model)}
-                      disabled={loading || Boolean(pendingModelAction)}
-                    >
-                      {isPendingModel(getLoadedModelName(item), "unload") ? <><span className="spinner" /> Déchargement…</> : "Décharger"}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Detailed status */}
-        <div className="card">
-          <div className="card-header-row">
-            <div className="card-title">📈 Statut détaillé</div>
-            <div className="card-header-actions">
-              <button className="btn btn-warning" onClick={handleDropCache} disabled={loading} title="Vide le page cache Linux pour libérer de la RAM (sans aucun modèle chargé)">
-                🧹 Vider Cache
-              </button>
-              <button className="btn btn-secondary" onClick={refreshStatusInfo} disabled={loading}>
-                ↻ Rafraîchir
-              </button>
+            <div>
+              <div className="card-title">📈 Statut détaillé</div>
+              <div className="card-subtitle card-subtitle-inline">Vue runtime, GPU et empreinte mémoire des modèles chargés.</div>
             </div>
           </div>
           {statusInfo ? (
             <>
-              <div className="status-grid">
+              <div className="status-grid status-grid-detail">
                 <div className="status-item">
                   <label>Total modèles</label>
                   <div className="value">{statusInfo.total_models}</div>
                 </div>
                 <div className="status-item">
-                  <label>GPU</label>
+                  <label>GPU runtime</label>
                   <div className="value">{statusInfo.gpu?.device ?? "N/A"}</div>
                 </div>
                 <div className="status-item">
@@ -829,22 +752,161 @@ function App() {
                   <div className="value">{statusInfo.running_models ?? 0}</div>
                 </div>
               </div>
-              {statusInfo.models?.length > 0 && (
-                <div className="model-grid">
+              {statusInfo.models?.length > 0 ? (
+                <div className="detail-list">
                   {statusInfo.models.map((item) => (
-                    <div key={String(item.model)} className="model-card">
-                      <div className="model-name">{String(item.model)}</div>
-                      <div className="model-meta">
-                        <span>Device : {String(item.device ?? "—")}</span>
-                        <span>VRAM : {formatBytes(item.approx_memory_bytes)}</span>
-                      </div>
+                    <div key={String(item.model)} className="detail-pill">
+                      <div className="detail-pill-name">{String(item.model)}</div>
+                      <div className="detail-pill-meta">{String(item.device ?? "—")} · {formatBytes(item.approx_memory_bytes)}</div>
                     </div>
                   ))}
                 </div>
+              ) : (
+                <div className="empty-state compact-empty-state">Aucun modèle actuellement en mémoire.</div>
               )}
             </>
           ) : (
-            <div className="empty-state">Statut non disponible. Cliquez sur ↻ Rafraîchir.</div>
+            <div className="empty-state">Statut non disponible. Utilise Rafraîchir.</div>
+          )}
+        </div>
+
+        <div className="card download-card">
+          <div className="card-title">⬇️ Télécharger un modèle</div>
+          <div className="card-subtitle">Nom Ollama ou lien GGUF, puis téléchargement.</div>
+          {downloadProgress > 0 && (
+            <div className="progress-bar">
+              <div className="progress-fill" style={{ width: `${downloadProgress}%` }}></div>
+              <span className="progress-text">{downloadProgress}%</span>
+            </div>
+          )}
+          <div className="download-grid">
+            <label className="field-block">
+              <span className="field-label">Nom Ollama</span>
+              <input
+                type="text"
+                value={ollamaName}
+                onChange={(e) => setOllamaName(e.target.value)}
+                placeholder="qwen2.5:1.5b"
+                aria-label="Nom du modèle Ollama"
+              />
+            </label>
+            <label className="field-block">
+              <span className="field-label">Lien Hugging Face</span>
+              <input
+                type="text"
+                value={huggingfaceUrl}
+                onChange={(e) => handleHFUrlChange(e.target.value)}
+                placeholder="https://huggingface.co/...gguf"
+                aria-label="URL GGUF HuggingFace"
+              />
+            </label>
+          </div>
+          <div className="download-actions">
+            <button className="btn btn-primary btn-download" onClick={handleDownloadUrl} disabled={loading}>
+              {loading ? <><span className="spinner" /> Téléchargement…</> : "⬇️ Télécharger"}
+            </button>
+          </div>
+        </div>
+
+        <div className="card model-table-card">
+          <div className="card-header-row">
+            <div>
+              <div className="card-title">🧠 Modèles</div>
+              <div className="card-subtitle card-subtitle-inline">Les modèles chargés sont mis en évidence directement dans la table.</div>
+            </div>
+            <div className="auto-sync-label">Mise à jour auto</div>
+          </div>
+          {unifiedModelRows.length === 0 ? (
+            <div className="empty-state">
+              Aucun modèle. Téléchargez-en un ci-dessus ou via
+              <code>wsl -d Ubuntu-24.04 -- bash -c 'cd ~/ollama-ipex && ./ollama pull qwen2.5:0.5b'</code>
+            </div>
+          ) : (
+            <div className="table-wrap">
+              <table className="model-table">
+                <thead>
+                  <tr>
+                    <th>Nom</th>
+                    <th>État</th>
+                    <th>Taille</th>
+                    <th>VRAM</th>
+                    <th>Modifié</th>
+                    <th>Expire</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {unifiedModelRows.map((row) => (
+                    <tr
+                      key={row.name}
+                      className={[
+                        row.loaded ? "row-loaded" : "",
+                        row.active ? "row-active" : "",
+                        isPendingModel(row.name) ? "row-pending" : "",
+                      ].filter(Boolean).join(" ")}
+                    >
+                      <td className="col-name">
+                        <div className="table-model-name">{row.name}</div>
+                      </td>
+                      <td>
+                        <div className="state-stack">
+                          {row.active && <span className="badge badge-success">✓ Actif</span>}
+                          {!row.active && row.loaded && <span className="badge badge-loaded">En mémoire</span>}
+                          {!row.loaded && <span className="badge badge-neutral">Disponible</span>}
+                          {isPendingModel(row.name, "load") && <span className="badge badge-pending"><span className="spinner spinner-small" /> Chargement…</span>}
+                          {isPendingModel(row.name, "delete") && <span className="badge badge-pending"><span className="spinner spinner-small" /> Suppression…</span>}
+                          {isPendingModel(row.name, "select") && <span className="badge badge-pending"><span className="spinner spinner-small" /> Activation…</span>}
+                          {isPendingModel(row.name, "unload") && <span className="badge badge-pending"><span className="spinner spinner-small" /> Déchargement…</span>}
+                        </div>
+                      </td>
+                      <td>{formatBytes(row.diskSize)}</td>
+                      <td>{formatBytes(row.vramSize)}</td>
+                      <td>{formatUnixDate(row.modifiedAt)}</td>
+                      <td>{formatShortDate(row.expiresAt)}</td>
+                      <td>
+                        <div className="table-actions">
+                          {row.loaded ? (
+                            <>
+                              <button
+                                className="btn btn-primary btn-table"
+                                onClick={() => handleSelectLoaded(row.name)}
+                                disabled={loading || Boolean(pendingModelAction) || row.active}
+                              >
+                                {row.active ? "✓ Actif" : "Sélectionner"}
+                              </button>
+                              <button
+                                className="btn btn-danger btn-table"
+                                onClick={() => handleUnloadModel(row.name)}
+                                disabled={loading || Boolean(pendingModelAction)}
+                              >
+                                Décharger
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                className="btn btn-primary btn-table"
+                                onClick={() => handleLoadFile(row.name)}
+                                disabled={loading || Boolean(pendingModelAction)}
+                              >
+                                Charger
+                              </button>
+                              <button
+                                className="btn btn-danger btn-table"
+                                onClick={() => handleDeleteFile(row.name)}
+                                disabled={loading || Boolean(pendingModelAction)}
+                              >
+                                Supprimer
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 
