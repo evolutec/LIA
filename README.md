@@ -274,25 +274,6 @@ wsl -d Ubuntu-24.04 -- bash -c 'pkill -f ollama'
 
 ---
 
-## Screenshots
-
-Pour un rendu GitHub plus premium, ajoute ensuite tes captures dans un dossier assets/ et décommente ce bloc :
-
-```md
-![AnythingLLM](assets/anythingllm.png)
-![Model Manager](assets/model-manager.png)
-![Open WebUI](assets/open-webui.png)
-```
-
-Si tu veux aller plus loin, tu peux aussi ajouter :
-
-- une capture de la home AnythingLLM ;
-- une capture du panneau de téléchargement GGUF ;
-- une capture d'Open WebUI connecté à Ollama ;
-- une capture du graphe Mermaid rendue dans GitHub.
-
----
-
 ## Troubleshooting
 
 | Problème | Vérification utile |
